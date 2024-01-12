@@ -16,7 +16,9 @@ from lavis.common.utils import is_convertible_to_int, is_url, cache_url
 
 @registry.register_task("captioning")
 class CaptionTask(BaseTask):
-    def __init__(self, num_beams, max_len, min_len, repetition_penalty, length_penalty, top_p, temperature, evaluate, report_metric=True, annotation_file=None, sample_id_key="image_id", caption_key="caption", split=["val"], load_gt_from_file=False, img_ids = []):
+    def __init__(self, num_beams, max_len, min_len, repetition_penalty, length_penalty, top_p, 
+        temperature, evaluate, report_metric=True, annotation_file=None, test_annotation_file=None, sample_id_key="image_id", 
+        caption_key="caption", split=["val"], test_split=["test"], load_gt_from_file=False, img_ids = []):
         super().__init__()
 
         self.num_beams = num_beams
@@ -34,6 +36,11 @@ class CaptionTask(BaseTask):
         self.caption_key = caption_key
         assert len(split) == 1, "Only support one split for evaluation."
         self.split = split[0]
+        #-----------wangcong add test_split---------
+        assert len(test_split) == 1, "Only support one split for test ds evaluation."
+        self.test_split = test_split[0]
+        self.test_annotation_file = test_annotation_file
+
         self.load_gt_from_file = load_gt_from_file
         self.img_ids = img_ids
 
@@ -56,6 +63,9 @@ class CaptionTask(BaseTask):
         caption_key = run_cfg.get("caption_key", "caption")
         load_gt_from_file = run_cfg.get("load_gt_from_file", False)
         split = run_cfg.get("valid_splits", ["val"])
+        #wangcong
+        test_split = run_cfg.get("test_splits", ["test"])
+
         img_ids = run_cfg.get("img_ids", []) # evaluate only subset of imgs
 
         return cls(
@@ -72,6 +82,8 @@ class CaptionTask(BaseTask):
             sample_id_key=sample_id_key,
             caption_key=caption_key,
             split=split,
+            #wangcong
+            test_split=test_split,
             load_gt_from_file=load_gt_from_file,
             img_ids=img_ids
         )
@@ -79,23 +91,48 @@ class CaptionTask(BaseTask):
     def build_datasets(self, cfg):
         datasets = super().build_datasets(cfg)
 
-        # get validation dataset name
-        val_ds_name = []
-        for name,d in datasets.items():
-            if self.split in d:
-                val_ds_name.append(name)
-        if not val_ds_name:
-            return datasets # no validation sets
-        assert len(val_ds_name) == 1, "Only support one dataset for validation"
-        val_ds_name = val_ds_name[0]
+        def create_gt_file(split, annotation_file):
+            # get validation dataset name
+            val_ds_name = []
+            for name,d in datasets.items():
+                if split in d:
+                    val_ds_name.append(name)
+            if not val_ds_name:
+                # return datasets # no validation sets
+                pass
+            assert len(val_ds_name) == 1, "Only support one dataset for validation"
+            val_ds_name = val_ds_name[0]
 
-        # get question file, annotation file and anwser list in COCO format
-        if self.annotation_file == None:
-            if 'coco' not in val_ds_name: # coco is already precomputed in dataset
-                self.annotation_file = os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt', f'{val_ds_name}_{self.split}_annotations.json')
-                if get_rank() == 0:
-                    os.makedirs(os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt'), exist_ok=True)
-                    convert_to_coco_gt(datasets[val_ds_name], self.annotation_file, self.caption_key, self.sample_id_key, self.split, load_gt_from_file=self.load_gt_from_file, img_ids=self.img_ids)
+            # get question file, annotation file and anwser list in COCO format
+            if annotation_file == None:
+                if 'coco' not in val_ds_name: # coco is already precomputed in dataset
+                    annotation_file = os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt', f'{val_ds_name}_{split}_annotations.json')
+                    if get_rank() == 0:
+                        os.makedirs(os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt'), exist_ok=True)
+                        convert_to_coco_gt(datasets[val_ds_name], annotation_file, self.caption_key, self.sample_id_key, split, load_gt_from_file=self.load_gt_from_file, img_ids=self.img_ids)
+
+            return annotation_file
+
+        # # get validation dataset name
+        # val_ds_name = []
+        # for name,d in datasets.items():
+        #     if self.split in d:
+        #         val_ds_name.append(name)
+        # if not val_ds_name:
+        #     return datasets # no validation sets
+        # assert len(val_ds_name) == 1, "Only support one dataset for validation"
+        # val_ds_name = val_ds_name[0]
+
+        # # get question file, annotation file and anwser list in COCO format
+        # if self.annotation_file == None:
+        #     if 'coco' not in val_ds_name: # coco is already precomputed in dataset
+        #         self.annotation_file = os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt', f'{val_ds_name}_{self.split}_annotations.json')
+        #         if get_rank() == 0:
+        #             os.makedirs(os.path.join(registry.get_path("cache_root"),f'{val_ds_name}_gt'), exist_ok=True)
+        #             convert_to_coco_gt(datasets[val_ds_name], self.annotation_file, self.caption_key, self.sample_id_key, self.split, load_gt_from_file=self.load_gt_from_file, img_ids=self.img_ids)
+        self.annotation_file = create_gt_file(self.split, self.annotation_file)
+        self.test_annotation_file = create_gt_file(self.test_split, self.test_annotation_file)
+
         return datasets
 
     def valid_step(self, model, samples):
@@ -142,12 +179,21 @@ class CaptionTask(BaseTask):
     @main_process
     def _report_metrics(self, eval_result_file, split_name):
 
-        if self.annotation_file == None:
-            # TODO better way to define this
-            coco_gt_root = os.path.join(registry.get_path("cache_root"), "coco_gt")
-            coco_val = coco_caption_eval(coco_gt_root, eval_result_file, split_name, img_ids=self.img_ids)
+        #wangcong add test process
+        if split_name=="test":
+            if self.test_annotation_file == None:
+                # TODO better way to define this
+                coco_gt_root = os.path.join(registry.get_path("cache_root"), "coco_gt")
+                coco_val = coco_caption_eval(coco_gt_root, eval_result_file, split_name, img_ids=self.img_ids)
+            else:
+                coco_val = coco_caption_eval(None, eval_result_file, split_name, annotation_file=self.test_annotation_file, img_ids=self.img_ids)
         else:
-            coco_val = coco_caption_eval(None, eval_result_file, split_name, annotation_file=self.annotation_file, img_ids=self.img_ids)
+            if self.annotation_file == None:
+                # TODO better way to define this
+                coco_gt_root = os.path.join(registry.get_path("cache_root"), "coco_gt")
+                coco_val = coco_caption_eval(coco_gt_root, eval_result_file, split_name, img_ids=self.img_ids)
+            else:
+                coco_val = coco_caption_eval(None, eval_result_file, split_name, annotation_file=self.annotation_file, img_ids=self.img_ids)
 
         agg_metrics = coco_val.eval["CIDEr"] + coco_val.eval["Bleu_4"]
         log_stats = {split_name: {k: v for k, v in coco_val.eval.items()}}
@@ -220,7 +266,7 @@ from torchvision.datasets.utils import download_url
 
 
 def coco_caption_eval(coco_gt_root, results_file, split, annotation_file=None, img_ids=[]):
-
+# TODO change annotation file when testing
     if annotation_file == None:
         urls = {
             "val": "https://storage.googleapis.com/sfr-vision-language-research/datasets/coco_karpathy_val_gt.json",
