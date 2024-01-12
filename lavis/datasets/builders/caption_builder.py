@@ -36,6 +36,17 @@ from lavis.datasets.datasets.vlep_dataset import VlepVideoDataset, VlepVideoInst
 from lavis.datasets.datasets.vsr_datasets import VSRCaptionDataset, VSRCaptionInstructDataset, VSRCaptionEvalDataset
 from lavis.datasets.datasets.textcaps_datasets import TextCapsCapDataset, TextCapsCapInstructDataset, TextCapsCapEvalDataset
 
+#wangcong 20231229
+@registry.register_builder("vegpests_caption")
+class VegpestsCapBuilder(BaseDatasetBuilder):
+    train_dataset_cls = COCOCapDataset
+    eval_dataset_cls = COCOCapEvalDataset
+
+    DATASET_CONFIG_DICT = {
+        "default": "configs/datasets/vegpests/defaults_cap.yaml",
+    }
+#=======end============
+
 @registry.register_builder("coco_caption")
 class COCOCapBuilder(BaseDatasetBuilder):
     train_dataset_cls = COCOCapDataset
