@@ -45,6 +45,15 @@ class VegpestsCapBuilder(BaseDatasetBuilder):
     DATASET_CONFIG_DICT = {
         "default": "configs/datasets/vegpests/defaults_cap.yaml",
     }
+
+@registry.register_builder("inat_insects_caption")
+class VegpestsCapBuilder(BaseDatasetBuilder):
+    train_dataset_cls = COCOCapDataset
+    eval_dataset_cls = COCOCapEvalDataset
+
+    DATASET_CONFIG_DICT = {
+        "default": "configs/datasets/inat_insects/defaults_cap.yaml",
+    }
 #=======end============
 
 @registry.register_builder("coco_caption")
